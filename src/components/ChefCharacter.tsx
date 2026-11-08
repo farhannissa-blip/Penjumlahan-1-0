@@ -442,6 +442,29 @@ export const ChefCharacter: React.FC<ChefCharacterProps> = ({
                   : 'rotate(-8deg)',
             }}
           >
+            {/* Glowing Spatula Flip Arc Trail when Flipping */}
+            {isSuccess && (
+              <g className="pointer-events-none">
+                <path
+                  d="M 118 88 Q 145 20 176 42"
+                  fill="none"
+                  stroke="#fde047"
+                  strokeWidth="5"
+                  strokeLinecap="round"
+                  strokeDasharray="6 6"
+                  opacity="0.85"
+                />
+                <circle cx="135" cy="42" r="4" fill="#ffffff" />
+                <circle cx="168" cy="34" r="3.5" fill="#34d399" />
+                <text x="122" y="34" fill="#fde047" fontSize="16" fontWeight="bold">
+                  ✦
+                </text>
+                <text x="166" y="26" fill="#ffffff" fontSize="14" fontWeight="bold">
+                  ★
+                </text>
+              </g>
+            )}
+
             {/* Right Arm */}
             <rect
               x="126"

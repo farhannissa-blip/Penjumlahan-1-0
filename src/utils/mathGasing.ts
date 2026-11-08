@@ -4,6 +4,19 @@ export interface PancakeChoice {
   plateColor: string;
 }
 
+export interface ContextualGasingTip {
+  id: string;
+  selectedA: number;
+  selectedB: number;
+  selectedSum: number;
+  targetSum: number;
+  status: 'too_high' | 'too_low';
+  diff: number;
+  headline: string;
+  mentalMathStep: string;
+  strategyAdvice: string;
+}
+
 export interface MathQuestion {
   id: string;
   level: number;
@@ -145,6 +158,54 @@ export function buildGasingExplanation(numA: number, numB: number, targetSum: nu
   return `Metode GASING: Simpan angka besar (${bigger}) di kepala, lalu tambahkan ${smaller} langkah lagi menjadi ${targetSum}. Jadi pasangan tepat adalah Pancake ${numA} dan Pancake ${numB} (${numA} + ${numB} = ${targetSum})!`;
 }
 
+/**
+ * Generates a contextual Metode GASING strategy hint when the player selects a wrong pair,
+ * teaching mental math ("simpan angka besar di kepala, hitung maju di jari") WITHOUT revealing the secret answer pair.
+ */
+export function buildContextualGasingTip(
+  selectedA: number,
+  selectedB: number,
+  targetSum: number
+): ContextualGasingTip {
+  const bigger = Math.max(selectedA, selectedB);
+  const smaller = Math.min(selectedA, selectedB);
+  const selectedSum = selectedA + selectedB;
+  const isTooHigh = selectedSum > targetSum;
+  const diff = Math.abs(selectedSum - targetSum);
+
+  const mentalMathStep =
+    selectedA === selectedB
+      ? `Angka kembar ${selectedA} + ${selectedB} = ${selectedSum} (Target: ${targetSum})`
+      : `Simpan angka besar (${bigger}) di kepala + hitung maju ${smaller} di jari = ${selectedSum}`;
+
+  let headline = '';
+  let strategyAdvice = '';
+
+  if (bigger >= targetSum) {
+    headline = `Angka ${bigger} Sudah ≥ Target ${targetSum}!`;
+    strategyAdvice = `Trik GASING: Karena targetnya ${targetSum}, kedua pancake harus lebih kecil dari ${targetSum}. Pilih 1 angka di bawah ${targetSum} untuk disimpan di kepala, lalu hitung maju sisanya!`;
+  } else if (isTooHigh) {
+    headline = `Kelebihan ${diff} Angka! (${selectedSum} > ${targetSum})`;
+    strategyAdvice = `Trik GASING: Simpan angka besar di kepala, lalu kurangi ${diff} langkah (pilih pasangan angka yang lebih kecil) agar pas berhenti di ${targetSum}!`;
+  } else {
+    headline = `Kurang ${diff} Angka Lagi! (${selectedSum} < ${targetSum})`;
+    strategyAdvice = `Trik GASING: Cari angka yang lebih besar (mendekati ${targetSum}) untuk disimpan di kepala, supaya kamu tinggal menghitung maju sedikit di jari menuju ${targetSum}!`;
+  }
+
+  return {
+    id: `tip-${Date.now()}-${selectedA}-${selectedB}`,
+    selectedA,
+    selectedB,
+    selectedSum,
+    targetSum,
+    status: isTooHigh ? 'too_high' : 'too_low',
+    diff,
+    headline,
+    mentalMathStep,
+    strategyAdvice,
+  };
+}
+
 export function generateQuestionForLevel(
   level: number,
   questionNumber: number,
@@ -179,7 +240,44 @@ export function generateQuestionForLevel(
   };
 }
 
+export type GameMode = 'adventure' | 'marathon';
+
+export function generateMarathonQuestion(
+  questionNumber: number,
+  previousSignature?: string
+): MathQuestion {
+  // First 3 questions warm up with 2..6, then full 2..10 range
+  const minSum = 2;
+  const maxSum = questionNumber <= 3 ? 6 : 10;
+  const allPairs = getValidPairsForRange(minSum, maxSum);
+
+  let chosenPair = allPairs[Math.floor(Math.random() * allPairs.length)];
+  if (allPairs.length > 1 && previousSignature) {
+    const filtered = allPairs.filter(([a, b]) => `${a}+${b}` !== previousSignature);
+    if (filtered.length > 0) {
+      chosenPair = filtered[Math.floor(Math.random() * filtered.length)];
+    }
+  }
+
+  const [numA, numB] = chosenPair;
+  const targetSum = numA + numB;
+  const choices = buildUniquePancakeChoices(numA, numB, targetSum);
+
+  return {
+    id: `MARATHON-Q${questionNumber}-${Date.now()}`,
+    level: 1,
+    questionNumber,
+    numA,
+    numB,
+    targetSum,
+    timeLimitSeconds: 60,
+    choices,
+    gasingTip: buildGasingExplanation(numA, numB, targetSum),
+  };
+}
+
 const LEADERBOARD_STORAGE_KEY = 'pancake_master_sdn66_leaderboard_v1';
+const MARATHON_LEADERBOARD_STORAGE_KEY = 'pancake_master_sdn66_marathon_leaderboard_v1';
 
 const INITIAL_LEADERBOARD: LeaderboardEntry[] = [
   {
@@ -223,6 +321,48 @@ const INITIAL_LEADERBOARD: LeaderboardEntry[] = [
   },
 ];
 
+const INITIAL_MARATHON_LEADERBOARD: LeaderboardEntry[] = [
+  {
+    id: 'm-seed-1',
+    playerName: 'M. Alfatih Gasing',
+    schoolName: 'SDN 66 Banda Aceh',
+    gradeClass: 'Kelas 4',
+    score: 2400,
+    highestLevel: 1,
+    correctCount: 16,
+    cookedPancakes: 32,
+    burntCount: 1,
+    accuracy: 94,
+    dateStr: 'Hari ini',
+  },
+  {
+    id: 'm-seed-2',
+    playerName: 'Cut Putri Keumala',
+    schoolName: 'SDN 66 Banda Aceh',
+    gradeClass: 'Kelas 3',
+    score: 1950,
+    highestLevel: 1,
+    correctCount: 13,
+    cookedPancakes: 26,
+    burntCount: 1,
+    accuracy: 93,
+    dateStr: 'Hari ini',
+  },
+  {
+    id: 'm-seed-3',
+    playerName: 'Teuku Ryan Pratama',
+    schoolName: 'SDN 66 Banda Aceh',
+    gradeClass: 'Kelas 2',
+    score: 1500,
+    highestLevel: 1,
+    correctCount: 10,
+    cookedPancakes: 20,
+    burntCount: 2,
+    accuracy: 83,
+    dateStr: 'Kemarin',
+  },
+];
+
 export function getLeaderboard(): LeaderboardEntry[] {
   if (typeof window === 'undefined') return INITIAL_LEADERBOARD;
   try {
@@ -238,18 +378,66 @@ export function getLeaderboard(): LeaderboardEntry[] {
   }
 }
 
-export function saveLeaderboardEntry(entry: Omit<LeaderboardEntry, 'id' | 'dateStr'>): LeaderboardEntry[] {
+export function saveLeaderboardEntry(
+  entry: Omit<LeaderboardEntry, 'id' | 'dateStr'>
+): LeaderboardEntry[] {
   const current = getLeaderboard();
   const newEntry: LeaderboardEntry = {
     ...entry,
     id: `entry-${Date.now()}`,
-    dateStr: new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }),
+    dateStr: new Date().toLocaleDateString('id-ID', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    }),
   };
   const updated = [...current, newEntry]
     .sort((a, b) => b.score - a.score)
     .slice(0, 15);
   try {
     window.localStorage.setItem(LEADERBOARD_STORAGE_KEY, JSON.stringify(updated));
+  } catch {
+    // Ignore storage quota errors
+  }
+  return updated;
+}
+
+export function getMarathonLeaderboard(): LeaderboardEntry[] {
+  if (typeof window === 'undefined') return INITIAL_MARATHON_LEADERBOARD;
+  try {
+    const raw = window.localStorage.getItem(MARATHON_LEADERBOARD_STORAGE_KEY);
+    if (!raw) {
+      window.localStorage.setItem(
+        MARATHON_LEADERBOARD_STORAGE_KEY,
+        JSON.stringify(INITIAL_MARATHON_LEADERBOARD)
+      );
+      return INITIAL_MARATHON_LEADERBOARD;
+    }
+    const parsed = JSON.parse(raw) as LeaderboardEntry[];
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : INITIAL_MARATHON_LEADERBOARD;
+  } catch {
+    return INITIAL_MARATHON_LEADERBOARD;
+  }
+}
+
+export function saveMarathonLeaderboardEntry(
+  entry: Omit<LeaderboardEntry, 'id' | 'dateStr'>
+): LeaderboardEntry[] {
+  const current = getMarathonLeaderboard();
+  const newEntry: LeaderboardEntry = {
+    ...entry,
+    id: `m-entry-${Date.now()}`,
+    dateStr: new Date().toLocaleDateString('id-ID', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    }),
+  };
+  const updated = [...current, newEntry]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 15);
+  try {
+    window.localStorage.setItem(MARATHON_LEADERBOARD_STORAGE_KEY, JSON.stringify(updated));
   } catch {
     // Ignore storage quota errors
   }

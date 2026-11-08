@@ -13,26 +13,32 @@ import {
   Play,
   RotateCcw,
   Sparkles,
+  Timer,
   Trophy,
-  Users,
   Volume2,
   VolumeX,
   X,
   CheckCircle2,
 } from 'lucide-react';
 import {
+  buildContextualGasingTip,
+  ContextualGasingTip,
+  GameMode,
+  generateMarathonQuestion,
   generateQuestionForLevel,
   getLeaderboard,
-   getLevelConfig,
+  getLevelConfig,
+  getMarathonLeaderboard,
   LeaderboardEntry,
-  LEVEL_CONFIGS,
   MathQuestion,
   PancakeChoice,
   saveLeaderboardEntry,
+  saveMarathonLeaderboardEntry,
 } from './utils/mathGasing';
 import { soundEngine } from './utils/sound';
 import { KitchenStage } from './components/KitchenStage';
 import { ChefMood } from './components/ChefCharacter';
+import { SparkleTrailOverlay } from './components/SparkleTrailOverlay';
 
 type ScreenState = 'HOME' | 'PLAYING' | 'LEVEL_UP' | 'GAME_OVER';
 type SkilletState = 'selecting' | 'ready_to_flip' | 'wrong_pair' | 'flipping' | 'golden' | 'burnt';
@@ -57,19 +63,24 @@ export default function App() {
   const [playerName, setPlayerName] = useState<string>('Koki Cilik');
   const [schoolName, setSchoolName] = useState<string>('SDN 66 Banda Aceh');
   const [gradeClass, setGradeClass] = useState<string>('Kelas 1');
+  const [gameMode, setGameMode] = useState<GameMode>('adventure');
   const [showTouchKeyboard, setShowTouchKeyboard] = useState<boolean>(false);
 
   // Navigation & Modal State
   const [screen, setScreen] = useState<ScreenState>('HOME');
   const [showGuideModal, setShowGuideModal] = useState<boolean>(false);
   const [showLeaderboardModal, setShowLeaderboardModal] = useState<boolean>(false);
+  const [leaderboardTab, setLeaderboardTab] = useState<GameMode>('adventure');
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>(() => getLeaderboard());
+  const [marathonLeaderboard, setMarathonLeaderboard] = useState<LeaderboardEntry[]>(() =>
+    getMarathonLeaderboard()
+  );
   const [isMuted, setIsMuted] = useState<boolean>(false);
 
   // Active Game State
   const [level, setLevel] = useState<number>(1);
   const [highestLevel, setHighestLevel] = useState<number>(1);
-  const [questionIndex, setQuestionIndex] = useState<number>(1); // 1 to 10 per level
+  const [questionIndex, setQuestionIndex] = useState<number>(1);
   const [score, setScore] = useState<number>(0);
   const [lives, setLives] = useState<number>(3);
   const [correctCount, setCorrectCount] = useState<number>(0);
@@ -87,38 +98,70 @@ export default function App() {
   const [chefSpeech, setChefSpeech] = useState<string>(
     'Ayo pilih 2 pancake yang sesuai dengan penjumlahan di atas wajan!'
   );
+  const [activeGasingTip, setActiveGasingTip] = useState<ContextualGasingTip | null>(null);
+  const [fastBonusTrigger, setFastBonusTrigger] = useState<number>(0);
+  const [flipSparkleTrigger, setFlipSparkleTrigger] = useState<number>(0);
 
   const lastSignatureRef = useRef<string>('');
   const warningTickSecondRef = useRef<number>(-1);
+  const questionStartTimeRef = useRef<number>(15);
 
   const toggleMute = () => {
     const next = !isMuted;
     setIsMuted(next);
-    soundEngine.isMuted = next;
+    soundEngine.setMuted(next);
   };
 
-  // Load a fresh question for given level & questionIndex
-  const loadQuestion = useCallback((targetLevel: number, targetQIndex: number) => {
-    const nextQ = generateQuestionForLevel(
-      targetLevel,
-      targetQIndex,
-      lastSignatureRef.current
-    );
-    lastSignatureRef.current = `${nextQ.numA}+${nextQ.numB}`;
-    setCurrentQuestion(nextQ);
-    setSelectedPancakes([]);
-    setSkilletState('selecting');
-    setTimeLeft(nextQ.timeLimitSeconds);
-    warningTickSecondRef.current = -1;
-    setChefMood('happy');
-    setChefSpeech(
-      `Cari 2 pancake di piring yang jika dijumlahkan hasilnya ${nextQ.targetSum}, lalu tekan BALIK SEKARANG!`
-    );
-  }, []);
+  // Load a fresh question for given mode, level & questionIndex
+  const loadQuestion = useCallback(
+    (
+      mode: GameMode,
+      targetLevel: number,
+      targetQIndex: number,
+      resetTimer: boolean = true,
+      currentRemainingTime?: number
+    ) => {
+      const nextQ =
+        mode === 'marathon'
+          ? generateMarathonQuestion(targetQIndex, lastSignatureRef.current)
+          : generateQuestionForLevel(targetLevel, targetQIndex, lastSignatureRef.current);
 
-  // Start a new cooking adventure
-  const handleStartGame = (e?: React.FormEvent) => {
+      lastSignatureRef.current = `${nextQ.numA}+${nextQ.numB}`;
+      setCurrentQuestion(nextQ);
+      setSelectedPancakes([]);
+      setSkilletState('selecting');
+
+      if (mode === 'marathon') {
+        if (resetTimer) {
+          setTimeLeft(60);
+          questionStartTimeRef.current = 60;
+        } else if (typeof currentRemainingTime === 'number') {
+          questionStartTimeRef.current = currentRemainingTime;
+        }
+      } else {
+        setTimeLeft(nextQ.timeLimitSeconds);
+        questionStartTimeRef.current = nextQ.timeLimitSeconds;
+      }
+
+      warningTickSecondRef.current = -1;
+      setFastBonusTrigger(0);
+      setActiveGasingTip(null);
+      setChefMood('happy');
+      setChefSpeech(
+        mode === 'marathon'
+          ? `Maraton Soal #${targetQIndex}: Cari 2 pancake yang jumlahnya ${nextQ.targetSum}!`
+          : `Cari 2 pancake di atas wajan yang jika dijumlahkan hasilnya ${nextQ.targetSum}!`
+      );
+    },
+    []
+  );
+
+  // Start a new cooking adventure or 60-second marathon
+  const handleStartGame = (e?: React.FormEvent, explicitMode?: GameMode) => {
     if (e) e.preventDefault();
+    const chosenMode = explicitMode || gameMode;
+    setGameMode(chosenMode);
+
     const cleanName = playerName.trim() || 'Koki Cilik';
     const cleanSchool = schoolName.trim() || 'SDN 66 Banda Aceh';
     setPlayerName(cleanName);
@@ -133,25 +176,28 @@ export default function App() {
     setCookedPancakes(0);
     setBurntCount(0);
 
-    loadQuestion(1, 1);
+    loadQuestion(chosenMode, 1, 1, true);
     setScreen('PLAYING');
     soundEngine.playReadyToFlipChime();
+    soundEngine.startStoveFire();
   };
 
-  // Finish game & record to leaderboard
+  // Finish game & record to the appropriate leaderboard (Adventure vs Marathon)
   const finishGame = useCallback(
     (
+      mode: GameMode,
       finalScore: number,
       finalHighestLevel: number,
       finalCorrect: number,
       finalCooked: number,
       finalBurnt: number
     ) => {
+      soundEngine.stopStoveFire();
       const totalAttempts = finalCorrect + finalBurnt;
       const accuracy =
         totalAttempts > 0 ? Math.round((finalCorrect / totalAttempts) * 100) : 0;
 
-      const updated = saveLeaderboardEntry({
+      const entryPayload = {
         playerName: playerName.trim() || 'Koki Cilik',
         schoolName: schoolName.trim() || 'SDN 66 Banda Aceh',
         gradeClass,
@@ -161,47 +207,77 @@ export default function App() {
         cookedPancakes: finalCooked,
         burntCount: finalBurnt,
         accuracy,
-      });
-      setLeaderboard(updated);
+      };
+
+      if (mode === 'marathon') {
+        const updatedMarathon = saveMarathonLeaderboardEntry(entryPayload);
+        setMarathonLeaderboard(updatedMarathon);
+        setLeaderboardTab('marathon');
+      } else {
+        const updatedAdventure = saveLeaderboardEntry(entryPayload);
+        setLeaderboard(updatedAdventure);
+        setLeaderboardTab('adventure');
+      }
       setScreen('GAME_OVER');
     },
     [playerName, schoolName, gradeClass]
   );
 
-  // Triggered when cooking timer runs out
+  // Triggered when cooking timer (or 60s Marathon timer) runs out
   const handleBurnTimeout = useCallback(() => {
     soundEngine.playCookingAlarmBurn();
     setSkilletState('burnt');
     setChefMood('burnt');
-    setChefSpeech('Waduh, waktu habis dan pancakenya hangus! Ayo perhatikan penjelasan di layar.');
-    setBurntCount((prev) => prev + 1);
-    setLives((prev) => Math.max(0, prev - 1));
-  }, []);
+    if (gameMode === 'marathon') {
+      setChefSpeech('Waktu Maraton 60 Detik selesai! Mari lihat total skor memasakmu!');
+    } else {
+      setChefSpeech('Waduh, waktu habis dan pancakenya hangus! Ayo perhatikan penjelasan di layar.');
+      setBurntCount((prev) => prev + 1);
+      setLives((prev) => Math.max(0, prev - 1));
+    }
+  }, [gameMode]);
 
-  // Countdown Timer Effect during active cooking
+  // Countdown Timer Effect & Procedural Stove Fire Intensity during active cooking
   useEffect(() => {
-    if (screen !== 'PLAYING') return;
-    if (
-      skilletState === 'flipping' ||
-      skilletState === 'golden' ||
-      skilletState === 'burnt'
-    ) {
+    if (screen !== 'PLAYING') {
+      soundEngine.stopStoveFire();
       return;
     }
+    if (skilletState === 'burnt') {
+      soundEngine.stopStoveFire();
+      return;
+    }
+    // In Adventure mode, pause the timer while flipping/golden; in Marathon mode, pause briefly only if burnt
+    if (
+      gameMode === 'adventure' &&
+      (skilletState === 'flipping' || skilletState === 'golden')
+    ) {
+      soundEngine.stopStoveFire();
+      return;
+    }
+
+    const totalDuration = gameMode === 'marathon' ? 60 : currentQuestion.timeLimitSeconds;
 
     const interval = window.setInterval(() => {
       setTimeLeft((prev) => {
         const next = Math.max(0, Number((prev - 0.1).toFixed(1)));
-        const ratio = next / currentQuestion.timeLimitSeconds;
+        const ratio = next / totalDuration;
+        const heatRatio = Math.max(0, Math.min(1, 1 - ratio));
 
-        // Play warning tick once per second when <= 35% time left
-        if (ratio <= 0.35 && next > 0) {
+        // Dynamically intensify procedural stove flame roar & crackling speed
+        soundEngine.updateStoveFireIntensity(heatRatio);
+
+        // Play warning tick once per second when <= 30% time left
+        if (ratio <= 0.3 && next > 0) {
           const wholeSec = Math.ceil(next);
           if (warningTickSecondRef.current !== wholeSec) {
             warningTickSecondRef.current = wholeSec;
             soundEngine.playTimerWarningTick();
-            setChefMood('worried');
-            setChefSpeech('Awas! Wajan mulai berasap, cepat pilih dan balik pancakenya!');
+            setChefMood((curr) =>
+              curr === 'wrong' || curr === 'ready' || curr === 'flipping' || curr === 'celebrating'
+                ? curr
+                : 'worried'
+            );
           }
         }
 
@@ -214,21 +290,41 @@ export default function App() {
       });
     }, 100);
 
-    return () => window.clearInterval(interval);
-  }, [screen, skilletState, currentQuestion.timeLimitSeconds, handleBurnTimeout]);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [screen, skilletState, gameMode, currentQuestion.timeLimitSeconds, handleBurnTimeout]);
 
   // Advance to next question or next level
   const advanceToNextQuestion = useCallback(
-    (currentLives: number, currentScore: number, currentCorrect: number, currentCooked: number, currentBurnt: number) => {
+    (
+      currentLives: number,
+      currentScore: number,
+      currentCorrect: number,
+      currentCooked: number,
+      currentBurnt: number,
+      remainingSec?: number
+    ) => {
+      if (gameMode === 'marathon') {
+        if ((remainingSec ?? timeLeft) <= 0) {
+          finishGame('marathon', currentScore, 1, currentCorrect, currentCooked, currentBurnt);
+          return;
+        }
+        const nextQIdx = questionIndex + 1;
+        setQuestionIndex(nextQIdx);
+        loadQuestion('marathon', 1, nextQIdx, false, remainingSec ?? timeLeft);
+        return;
+      }
+
       if (currentLives <= 0) {
-        finishGame(currentScore, highestLevel, currentCorrect, currentCooked, currentBurnt);
+        finishGame('adventure', currentScore, highestLevel, currentCorrect, currentCooked, currentBurnt);
         return;
       }
 
       if (questionIndex < 10) {
         const nextQIdx = questionIndex + 1;
         setQuestionIndex(nextQIdx);
-        loadQuestion(level, nextQIdx);
+        loadQuestion('adventure', level, nextQIdx, true);
       } else {
         // Completed 10 questions in this level!
         if (level < 10) {
@@ -240,11 +336,11 @@ export default function App() {
         } else {
           // Completed all 10 levels!
           soundEngine.playLevelUp();
-          finishGame(currentScore, 10, currentCorrect, currentCooked, currentBurnt);
+          finishGame('adventure', currentScore, 10, currentCorrect, currentCooked, currentBurnt);
         }
       }
     },
-    [questionIndex, level, highestLevel, loadQuestion, finishGame]
+    [gameMode, timeLeft, questionIndex, level, highestLevel, loadQuestion, finishGame]
   );
 
   // Toggle selection of one of the 4 pancakes cooking on the skillet
@@ -257,7 +353,6 @@ export default function App() {
       return;
     }
 
-    // If tapping an already-selected pancake on the skillet, deselect it
     const alreadySelected = selectedPancakes.some((p) => p.id === choice.id);
     if (alreadySelected) {
       soundEngine.playRemovePancake();
@@ -286,22 +381,26 @@ export default function App() {
     } else if (updated.length === 2) {
       const sum = updated[0].value + updated[1].value;
       if (sum === currentQuestion.targetSum) {
-        // Exact pair selected! Ready to flip!
         soundEngine.playReadyToFlipChime();
         setSkilletState('ready_to_flip');
+        setActiveGasingTip(null);
         setChefMood('ready');
         setChefSpeech(
           'Pasangan tepat! Cepat ketuk tombol BALIK SEKARANG sebelum hangus!'
         );
       } else {
-        // Wrong sum! Show distinct 'wrong' facial expression on Chef
         soundEngine.playWrongPairTryAgain();
         setSkilletState('wrong_pair');
         setChefMood('wrong');
-        setChefSpeech(
-          `Belum tepat! Jumlahnya belum ${currentQuestion.targetSum}. Ayo pilih ulang sebelum hangus!`
+        setActiveGasingTip(
+          buildContextualGasingTip(updated[0].value, updated[1].value, currentQuestion.targetSum)
         );
-        // Automatically clear wrong pair after 900ms so student can immediately re-pick
+        if (gameMode === 'marathon') {
+          setBurntCount((prev) => prev + 1);
+        }
+        setChefSpeech(
+          `Belum tepat! Jumlahnya belum ${currentQuestion.targetSum}. Cek Tips GASING di pojok layar!`
+        );
         window.setTimeout(() => {
           setSelectedPancakes((curr) =>
             curr.length === 2 && curr[0].value + curr[1].value !== currentQuestion.targetSum
@@ -310,7 +409,7 @@ export default function App() {
           );
           setSkilletState((curr) => (curr === 'wrong_pair' ? 'selecting' : curr));
           setChefMood((curr) => (curr === 'wrong' ? 'happy' : curr));
-        }, 900);
+        }, 850);
       }
     }
   };
@@ -332,16 +431,28 @@ export default function App() {
     const sum = selectedPancakes[0].value + selectedPancakes[1].value;
 
     if (sum === currentQuestion.targetSum) {
-      // Correct! Flip animation -> Golden -> Award points
       setSkilletState('flipping');
       setChefMood('flipping');
+      setFlipSparkleTrigger(Date.now());
       soundEngine.playFlipSuccess();
 
-      const isFastBonus = timeLeft / currentQuestion.timeLimitSeconds >= 0.5;
+      // In Adventure mode: solved in <= 50% of level timer; in Marathon mode: solved in <= 3.5 seconds!
+      const elapsedOnQuestion = questionStartTimeRef.current - timeLeft;
+      const isFastBonus =
+        gameMode === 'marathon'
+          ? elapsedOnQuestion <= 3.5
+          : timeLeft / currentQuestion.timeLimitSeconds >= 0.5;
+
+      if (isFastBonus) {
+        setFastBonusTrigger(Date.now());
+        soundEngine.playFastBonusFireworks();
+      }
+
       const earnedPoints = 100 + (isFastBonus ? 50 : 0);
       const nextScore = score + earnedPoints;
       const nextCorrect = correctCount + 1;
       const nextCooked = cookedPancakes + 2;
+      const snapshotTime = timeLeft;
 
       setScore(nextScore);
       setCorrectCount(nextCorrect);
@@ -350,42 +461,54 @@ export default function App() {
         `Hebat! Jawabanmu benar! ${selectedPancakes[0].value} + ${selectedPancakes[1].value} = ${sum}. (+${earnedPoints} Poin${isFastBonus ? ' Bonus Cepat!' : ''})`
       );
 
-      // Settle to golden with butter & maple syrup after flip air animation
+      // Settle to golden with butter & maple syrup
       window.setTimeout(() => {
         setSkilletState('golden');
         setChefMood('celebrating');
-      }, 780);
+      }, 650);
 
-      // Advance to next question after showing golden pancake celebration
+      // Snappier transition in Marathon mode (1050ms) so player can answer more questions in 60s
+      const nextDelay = gameMode === 'marathon' ? 1050 : 1950;
       window.setTimeout(() => {
-        advanceToNextQuestion(lives, nextScore, nextCorrect, nextCooked, burntCount);
-      }, 2100);
+        advanceToNextQuestion(lives, nextScore, nextCorrect, nextCooked, burntCount, snapshotTime);
+      }, nextDelay);
     } else {
-      // If they clicked flip while wrong pair was still on pan
       soundEngine.playWrongPairTryAgain();
       setSkilletState('wrong_pair');
       setChefMood('wrong');
+      setActiveGasingTip(
+        buildContextualGasingTip(
+          selectedPancakes[0].value,
+          selectedPancakes[1].value,
+          currentQuestion.targetSum
+        )
+      );
       setChefSpeech(
-        `Jumlahnya ${sum}, bukan ${currentQuestion.targetSum}! Ayo ganti pilihan pancakemu sebelum waktu habis!`
+        `Jumlahnya ${sum}, bukan ${currentQuestion.targetSum}! Cek Tips GASING di pojok layar!`
       );
       window.setTimeout(() => {
         setSelectedPancakes([]);
         setSkilletState('selecting');
         setChefMood((curr) => (curr === 'wrong' ? 'happy' : curr));
-      }, 850);
+      }, 800);
     }
   };
 
   // Continue after burnt pancake explanation modal
   const handleNextAfterBurn = () => {
+    if (gameMode === 'marathon') {
+      finishGame('marathon', score, 1, correctCount, cookedPancakes, burntCount);
+      return;
+    }
     advanceToNextQuestion(lives, score, correctCount, cookedPancakes, burntCount);
   };
 
   // Continue to next level from Level Up modal
   const handleStartNextLevel = () => {
     setQuestionIndex(1);
-    loadQuestion(level, 1);
+    loadQuestion('adventure', level, 1, true);
     setScreen('PLAYING');
+    soundEngine.startStoveFire();
   };
 
   // Touch keyboard handler for PID / Smart TV
@@ -404,9 +527,17 @@ export default function App() {
   const successPercentage =
     totalQuestionsAttempted > 0
       ? Math.round((correctCount / totalQuestionsAttempted) * 100)
+      : correctCount > 0
+      ? 100
       : 0;
 
   const getMotivationalMessage = () => {
+    if (gameMode === 'marathon') {
+      if (correctCount >= 12) {
+        return `Luar biasa cepat! Dalam 60 detik kamu berhasil memasak ${cookedPancakes} pancake (${correctCount} soal)! Kamu benar-benar Juara Maraton GASING SDN 66 Banda Aceh!`;
+      }
+      return `Hebat! Dalam Maraton 60 detik kamu berhasil menyelesaikan ${correctCount} pesanan pancake. Ayo main lagi untuk memecahkan rekor skormu!`;
+    }
     if (successPercentage >= 85) {
       return 'Hebat! Kamu semakin mahir menjumlahkan angka dengan Metode GASING. Terus berlatih menjadi Master Pancake kebanggaan SDN 66 Banda Aceh!';
     }
@@ -416,8 +547,14 @@ export default function App() {
     return 'Semangat terus Koki Cilik! Ingat rahasia Metode GASING: simpan angka besar di kepala, lalu tambahkan angka kecilnya. Ayo coba lagi!';
   };
 
+  const activeLeaderboardList =
+    leaderboardTab === 'marathon' ? marathonLeaderboard : leaderboard;
+
   return (
     <div className="min-h-screen w-full bg-amber-50 text-stone-900 select-none">
+      {/* Interactive Cursor / Touch Sparkle Trail & Spatula Flip Sparkle Burst */}
+      <SparkleTrailOverlay flipBurstTrigger={flipSparkleTrigger} />
+
       {/* =========================================================
           SCREEN 1: HALAMAN DEPAN (OPENING MENU)
          ========================================================= */}
@@ -460,6 +597,13 @@ export default function App() {
                 </button>
                 <button
                   type="button"
+                  onClick={() => handleStartGame(undefined, 'marathon')}
+                  className="hover:text-amber-300 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  Maraton 60 Detik
+                </button>
+                <button
+                  type="button"
                   onClick={toggleMute}
                   className="hover:text-amber-300 transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5"
                 >
@@ -482,8 +626,8 @@ export default function App() {
           </header>
 
           {/* Main Hero Content: 2-Column Balanced Split */}
-          <main className="relative z-10 flex-1 max-w-7xl w-full mx-auto px-4 sm:px-8 py-6 sm:py-10 flex items-center">
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch w-full">
+          <main className="relative z-10 flex-1 max-w-7xl w-full mx-auto px-4 sm:px-8 py-5 sm:py-8 flex items-center">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-8 items-stretch w-full">
               {/* Left Column: Title, Subtitle, Hero Chef Illustration & Feature Highlights */}
               <div className="lg:col-span-6 flex flex-col justify-between bg-amber-950/75 border-2 border-amber-500/50 rounded-3xl p-6 sm:p-8 shadow-2xl text-amber-50">
                 <div>
@@ -496,13 +640,14 @@ export default function App() {
                   >
                     PANCAKE MASTER
                   </h1>
-                  <p className="text-base sm:text-lg font-extrabold text-white tracking-wide mb-4">
+                  <p className="text-base sm:text-lg font-extrabold text-white tracking-wide mb-3">
                     MEDIA PEMBELAJARAN SDN 66 BANDA ACEH
                   </p>
-                  <p className="text-xs sm:text-sm text-amber-100/90 leading-relaxed mb-6">
+                  <p className="text-xs sm:text-sm text-amber-100/90 leading-relaxed mb-5">
                     Jadilah Koki Cilik handal! Belajar penjumlahan hasil 2 sampai 10 dengan metode{' '}
-                    <strong>GASING (Gampang, Asyik, dan Menyenangkan)</strong>. Pilih dua dari empat
-                    pancake yang sedang dimasak di atas wajan panas dan balik sebelum hangus!
+                    <strong>GASING (Gampang, Asyik, dan Menyenangkan)</strong>. Tersedia{' '}
+                    <strong>Mode Petualangan 10 Level</strong> dan{' '}
+                    <strong>Mode Maraton Memasak 60 Detik</strong>!
                   </p>
                 </div>
 
@@ -512,41 +657,41 @@ export default function App() {
                     src="/src/assets/images/chef_mascot_hero_1794101459654.jpg"
                     alt="Koki Cilik SDN 66 Banda Aceh sedang memasak pancake"
                     referrerPolicy="no-referrer"
-                    className="w-36 h-36 sm:w-44 sm:h-44 rounded-2xl object-cover border-2 border-amber-300 shrink-0 shadow-md"
+                    className="w-32 h-32 sm:w-40 sm:h-40 rounded-2xl object-cover border-2 border-amber-300 shrink-0 shadow-md"
                   />
                   <div className="space-y-2 text-left">
                     <div className="text-sm sm:text-base font-display font-bold text-amber-300">
                       Halo Teman-Teman SDN 66 Banda Aceh!
                     </div>
                     <p className="text-xs sm:text-sm text-amber-100 leading-snug">
-                      &ldquo;Siapkan spatulamu! Ada <strong>10 Level Dapur</strong> dengan tantangan
-                      memasak pancake keemasan, mentega meleleh, dan sirup maple yang lezat!&rdquo;
+                      &ldquo;Uji ketangkasan berhitungmu di <strong>10 Level Dapur</strong> atau
+                      pecahkan rekor jawaban terbanyak dalam waktu <strong>60 Detik Maraton</strong>!&rdquo;
                     </p>
                     <div className="pt-1 text-xs font-semibold text-emerald-300">
-                      10 Level Bertahap · 3 Nyawa Koki · Efek Suara Permainan
+                      10 Level Petualangan · Maraton 60 Detik · 2 Papan Skor
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* Right Column: Player Registration Form & Primary Action Buttons */}
-              <div className="lg:col-span-6 flex flex-col justify-between card-25d-wood rounded-3xl p-6 sm:p-8 text-stone-900">
-                <form onSubmit={handleStartGame} className="space-y-4">
-                  <div className="border-b-2 border-amber-300 pb-3 flex items-center justify-between">
+              {/* Right Column: Player Registration Form, Mode Selector & Primary Action Buttons */}
+              <div className="lg:col-span-6 flex flex-col justify-between card-25d-wood rounded-3xl p-5 sm:p-7 text-stone-900">
+                <form onSubmit={(e) => handleStartGame(e)} className="space-y-3.5">
+                  <div className="border-b-2 border-amber-300 pb-2.5 flex items-center justify-between">
                     <div>
                       <h2 className="text-xl sm:text-2xl font-display font-bold text-stone-900">
                         Formulir Koki Cilik
                       </h2>
                       <p className="text-xs text-stone-700 font-medium">
-                        Isi identitasmu sebelum masuk ke dapur restoran
+                        Isi identitas &amp; pilih mode permainanmu
                       </p>
                     </div>
-                    <ChefHat className="w-9 h-9 text-amber-700 shrink-0" />
+                    <ChefHat className="w-8 h-8 text-amber-700 shrink-0" />
                   </div>
 
                   {/* Field 1: Nama Pemain */}
                   <div>
-                    <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center justify-between mb-1">
                       <label htmlFor="playerNameInput" className="text-xs sm:text-sm font-bold text-stone-800">
                         Nama Pemain
                       </label>
@@ -566,33 +711,33 @@ export default function App() {
                       onChange={(e) => setPlayerName(e.target.value)}
                       placeholder="Masukkan nama panggilanmu..."
                       maxLength={24}
-                      className="w-full px-4 py-3 rounded-xl bg-white border-2 border-amber-500 text-stone-900 font-bold text-base focus:outline-none focus:ring-4 focus:ring-amber-400"
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-white border-2 border-amber-500 text-stone-900 font-bold text-sm sm:text-base focus:outline-none focus:ring-4 focus:ring-amber-400"
                     />
 
-                    {/* Quick Name Buttons for Touch TV / Classroom PID without Keyboard */}
-                    <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+                    {/* Quick Name Buttons */}
+                    <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
                       <span className="text-[11px] font-bold text-stone-600">Pilih Cepat:</span>
                       {QUICK_STUDENT_NAMES.map((sampleName) => (
                         <button
                           key={sampleName}
                           type="button"
                           onClick={() => setPlayerName(sampleName)}
-                          className="px-2.5 py-1 rounded-lg bg-amber-200/90 hover:bg-amber-300 text-amber-950 font-bold text-xs transition-colors cursor-pointer"
+                          className="px-2 py-0.5 rounded-lg bg-amber-200/90 hover:bg-amber-300 text-amber-950 font-bold text-xs transition-colors cursor-pointer"
                         >
                           {sampleName}
                         </button>
                       ))}
                     </div>
 
-                    {/* Optional On-Screen Touch Keyboard for Smartboard/PID */}
+                    {/* Optional On-Screen Touch Keyboard */}
                     {showTouchKeyboard && (
-                      <div className="mt-2.5 p-2.5 rounded-xl bg-amber-100 border-2 border-amber-400 grid grid-cols-7 gap-1.5">
+                      <div className="mt-2 p-2 rounded-xl bg-amber-100 border-2 border-amber-400 grid grid-cols-7 gap-1">
                         {TOUCH_KEYBOARD_KEYS.map((key) => (
                           <button
                             key={key}
                             type="button"
                             onClick={() => handleTouchKey(key)}
-                            className={`py-2 rounded-lg font-display font-bold text-xs shadow-xs cursor-pointer active:scale-95 ${
+                            className={`py-1.5 rounded-lg font-display font-bold text-xs shadow-xs cursor-pointer active:scale-95 ${
                               key === 'HAPUS'
                                 ? 'col-span-2 bg-rose-500 text-white'
                                 : key === 'SPASI'
@@ -607,9 +752,9 @@ export default function App() {
                     )}
                   </div>
 
-                  {/* Field 2: Nama Sekolah (Default: SDN 66 Banda Aceh) */}
+                  {/* Field 2: Nama Sekolah */}
                   <div>
-                    <label htmlFor="schoolNameInput" className="block text-xs sm:text-sm font-bold text-stone-800 mb-1.5">
+                    <label htmlFor="schoolNameInput" className="block text-xs sm:text-sm font-bold text-stone-800 mb-1">
                       Nama Sekolah
                     </label>
                     <input
@@ -617,16 +762,16 @@ export default function App() {
                       type="text"
                       value={schoolName}
                       onChange={(e) => setSchoolName(e.target.value)}
-                      className="w-full px-4 py-3 rounded-xl bg-white border-2 border-amber-500 text-stone-900 font-bold text-base focus:outline-none focus:ring-4 focus:ring-amber-400"
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-white border-2 border-amber-500 text-stone-900 font-bold text-sm sm:text-base focus:outline-none focus:ring-4 focus:ring-amber-400"
                     />
                   </div>
 
                   {/* Field 3: Pilihan Kelas 1 sampai 6 */}
                   <div>
-                    <label className="block text-xs sm:text-sm font-bold text-stone-800 mb-1.5">
+                    <label className="block text-xs sm:text-sm font-bold text-stone-800 mb-1">
                       Pilih Kelas (1 sampai 6)
                     </label>
-                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
                       {['Kelas 1', 'Kelas 2', 'Kelas 3', 'Kelas 4', 'Kelas 5', 'Kelas 6'].map(
                         (kelas) => {
                           const isSelected = gradeClass === kelas;
@@ -635,7 +780,7 @@ export default function App() {
                               key={kelas}
                               type="button"
                               onClick={() => setGradeClass(kelas)}
-                              className={`py-2.5 px-2 rounded-xl font-display font-bold text-xs sm:text-sm transition-all cursor-pointer whitespace-nowrap ${
+                              className={`py-2 px-2 rounded-xl font-display font-bold text-xs sm:text-sm transition-all cursor-pointer whitespace-nowrap ${
                                 isSelected
                                   ? 'bg-amber-600 text-white shadow-md ring-2 ring-amber-900 scale-105'
                                   : 'bg-white hover:bg-amber-100 text-stone-800 border-2 border-amber-400'
@@ -649,32 +794,92 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Primary Action Buttons: MULAI MEMASAK, PANDUAN BERMAIN, LEADERBOARD */}
-                  <div className="pt-3 space-y-3">
-                    <button
-                      type="submit"
-                      className="w-full py-4 px-6 rounded-2xl btn-25d-emerald text-stone-950 font-display font-bold text-xl tracking-wide flex items-center justify-center gap-2.5 cursor-pointer"
-                    >
-                      <Play className="w-6 h-6 fill-stone-950" />
-                      <span>MULAI MEMASAK</span>
-                    </button>
+                  {/* Field 4: Pilihan Mode Permainan (Petualangan 10 Level vs Maraton Memasak 60 Detik) */}
+                  <div>
+                    <label className="block text-xs sm:text-sm font-bold text-stone-800 mb-1.5">
+                      Pilih Mode Permainan
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => setGameMode('adventure')}
+                        className={`p-3 rounded-2xl border-2 text-left transition-all cursor-pointer flex items-center gap-2.5 ${
+                          gameMode === 'adventure'
+                            ? 'bg-emerald-600 text-white border-emerald-900 shadow-md ring-2 ring-emerald-400'
+                            : 'bg-white hover:bg-amber-100 text-stone-800 border-amber-400'
+                        }`}
+                      >
+                        <Play className="w-5 h-5 shrink-0" />
+                        <div>
+                          <div className="font-display font-bold text-sm leading-tight">
+                            Petualangan 10 Level
+                          </div>
+                          <div className={`text-[11px] ${gameMode === 'adventure' ? 'text-emerald-100' : 'text-stone-600'}`}>
+                            10 Level bertahap · 3 Nyawa
+                          </div>
+                        </div>
+                      </button>
 
-                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setGameMode('marathon')}
+                        className={`p-3 rounded-2xl border-2 text-left transition-all cursor-pointer flex items-center gap-2.5 ${
+                          gameMode === 'marathon'
+                            ? 'bg-rose-600 text-white border-rose-900 shadow-md ring-2 ring-rose-400'
+                            : 'bg-white hover:bg-amber-100 text-stone-800 border-amber-400'
+                        }`}
+                      >
+                        <Timer className="w-5 h-5 shrink-0" />
+                        <div>
+                          <div className="font-display font-bold text-sm leading-tight">
+                            Maraton Memasak (60s)
+                          </div>
+                          <div className={`text-[11px] ${gameMode === 'marathon' ? 'text-rose-100' : 'text-stone-600'}`}>
+                            Waktu tetap 60 detik · Tanpa batas soal
+                          </div>
+                        </div>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Primary Action Buttons */}
+                  <div className="pt-2 space-y-2.5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => handleStartGame(undefined, 'adventure')}
+                        className="py-3.5 px-4 rounded-2xl btn-25d-emerald text-stone-950 font-display font-bold text-base sm:text-lg tracking-wide flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap"
+                      >
+                        <Play className="w-5 h-5 fill-stone-950 shrink-0" />
+                        <span>MULAI MEMASAK</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleStartGame(undefined, 'marathon')}
+                        className="py-3.5 px-4 rounded-2xl btn-25d-red text-white font-display font-bold text-base sm:text-lg tracking-wide flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap"
+                      >
+                        <Timer className="w-5 h-5 shrink-0" />
+                        <span>MARATON 60 DETIK</span>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2.5">
                       <button
                         type="button"
                         onClick={() => setShowGuideModal(true)}
-                        className="py-3 px-4 rounded-2xl btn-25d-amber text-stone-950 font-display font-bold text-sm sm:text-base flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap"
+                        className="py-2.5 px-4 rounded-2xl btn-25d-amber text-stone-950 font-display font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
                       >
-                        <BookOpen className="w-5 h-5 shrink-0" />
+                        <BookOpen className="w-4 h-4 shrink-0" />
                         <span>PANDUAN BERMAIN</span>
                       </button>
 
                       <button
                         type="button"
                         onClick={() => setShowLeaderboardModal(true)}
-                        className="py-3 px-4 rounded-2xl btn-25d-amber text-stone-950 font-display font-bold text-sm sm:text-base flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap"
+                        className="py-2.5 px-4 rounded-2xl btn-25d-amber text-stone-950 font-display font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
                       >
-                        <Trophy className="w-5 h-5 shrink-0" />
+                        <Trophy className="w-4 h-4 shrink-0" />
                         <span>LEADERBOARD</span>
                       </button>
                     </div>
@@ -696,6 +901,7 @@ export default function App() {
          ========================================================= */}
       {screen === 'PLAYING' && (
         <KitchenStage
+          gameMode={gameMode}
           playerName={playerName}
           schoolName={schoolName}
           gradeClass={gradeClass}
@@ -711,11 +917,14 @@ export default function App() {
           timeLeft={timeLeft}
           chefMood={chefMood}
           chefSpeech={chefSpeech}
+          activeGasingTip={activeGasingTip}
+          fastBonusTrigger={fastBonusTrigger}
           isMuted={isMuted}
           onToggleMute={toggleMute}
           onTogglePancakeOnSkillet={handleTogglePancakeOnSkillet}
           onClearSkillet={handleClearSkillet}
           onFlipPancakes={handleFlipPancakes}
+          onDismissGasingTip={() => setActiveGasingTip(null)}
           onNextAfterBurn={handleNextAfterBurn}
           onReturnHome={() => setScreen('HOME')}
         />
@@ -796,13 +1005,18 @@ export default function App() {
               />
               <div className="text-center sm:text-left">
                 <div className="text-xs font-extrabold text-amber-800">
-                  LAPORAN HASIL MEMASAK · {schoolName}
+                  {gameMode === 'marathon'
+                    ? `HASIL MARATON MEMASAK 60 DETIK · ${schoolName}`
+                    : `LAPORAN HASIL MEMASAK · ${schoolName}`}
                 </div>
                 <h2 className="text-2xl sm:text-3xl font-display font-bold text-stone-900">
                   Selesai Memasak, Koki {playerName}!
                 </h2>
                 <p className="text-xs sm:text-sm font-semibold text-stone-700">
-                  {gradeClass} · Gelar: {getLevelConfig(highestLevel).title}
+                  {gradeClass} ·{' '}
+                  {gameMode === 'marathon'
+                    ? 'Mode Maraton 60 Detik'
+                    : `Gelar: ${getLevelConfig(highestLevel).title}`}
                 </p>
               </div>
             </div>
@@ -817,9 +1031,11 @@ export default function App() {
               </div>
 
               <div className="bg-white border-2 border-amber-400 rounded-2xl p-3.5 text-center">
-                <div className="text-xs font-bold text-stone-600">Level Tertinggi</div>
-                <div className="text-2xl sm:text-3xl font-display font-bold text-stone-900">
-                  Level {highestLevel}
+                <div className="text-xs font-bold text-stone-600">
+                  {gameMode === 'marathon' ? 'Mode Permainan' : 'Level Tertinggi'}
+                </div>
+                <div className="text-xl sm:text-2xl font-display font-bold text-stone-900">
+                  {gameMode === 'marathon' ? 'Maraton 60s' : `Level ${highestLevel}`}
                 </div>
               </div>
 
@@ -838,7 +1054,9 @@ export default function App() {
               </div>
 
               <div className="bg-white border-2 border-amber-400 rounded-2xl p-3.5 text-center">
-                <div className="text-xs font-bold text-stone-600">Pancake Hangus</div>
+                <div className="text-xs font-bold text-stone-600">
+                  {gameMode === 'marathon' ? 'Salah Pilih' : 'Pancake Hangus'}
+                </div>
                 <div className="text-2xl sm:text-3xl font-display font-bold text-rose-600">
                   {burntCount}
                 </div>
@@ -866,11 +1084,11 @@ export default function App() {
             </div>
 
             {/* Required End Screen Buttons: MAIN LAGI & KEMBALI KE MENU */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <button
                 type="button"
-                onClick={() => handleStartGame()}
-                className="py-4 px-6 rounded-2xl btn-25d-emerald text-stone-950 font-display font-bold text-lg flex items-center justify-center gap-2 cursor-pointer"
+                onClick={() => handleStartGame(undefined, gameMode)}
+                className="py-4 px-5 rounded-2xl btn-25d-emerald text-stone-950 font-display font-bold text-base sm:text-lg flex items-center justify-center gap-2 cursor-pointer"
               >
                 <RotateCcw className="w-5 h-5" />
                 <span>MAIN LAGI</span>
@@ -878,8 +1096,20 @@ export default function App() {
 
               <button
                 type="button"
+                onClick={() => {
+                  setLeaderboardTab(gameMode);
+                  setShowLeaderboardModal(true);
+                }}
+                className="py-4 px-5 rounded-2xl btn-25d-amber text-stone-950 font-display font-bold text-base sm:text-lg flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Trophy className="w-5 h-5" />
+                <span>PAPAN SKOR</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setScreen('HOME')}
-                className="py-4 px-6 rounded-2xl btn-25d-amber text-stone-950 font-display font-bold text-lg flex items-center justify-center gap-2 cursor-pointer"
+                className="py-4 px-5 rounded-2xl btn-25d-amber text-stone-950 font-display font-bold text-base sm:text-lg flex items-center justify-center gap-2 cursor-pointer"
               >
                 <ChefHat className="w-5 h-5" />
                 <span>KEMBALI KE MENU</span>
@@ -919,9 +1149,8 @@ export default function App() {
                 </h3>
                 <p>
                   <strong>GASING (Gampang, Asyik, dan Menyenangkan)</strong> mengajarkan penjumlahan
-                  melalui benda konkret (pancake dan titik visual) serta mengenal{' '}
-                  <strong>pasangan bilangan</strong> hasil 2 sampai 10 dengan cepat tanpa menghafal
-                  secara membosankan.
+                  dengan mengenal <strong>pasangan bilangan</strong> hasil 2 sampai 10 secara cepat
+                  dan menyenangkan.
                 </p>
               </div>
 
@@ -930,30 +1159,31 @@ export default function App() {
                   2. Langkah Memasak Pancake:
                 </h3>
                 <ol className="list-decimal list-inside space-y-1.5 font-medium">
-                  <li>Perhatikan soal penjumlahan di papan pesanan (contoh: <strong>BERAPA HASIL 3 + 4?</strong> dengan Target Jumlah <strong>7</strong>).</li>
-                  <li>Ketuk <strong>Pancake angka pertama (3)</strong> dan <strong>Pancake angka kedua (4)</strong> dari piring warna-warni ke atas wajan.</li>
-                  <li>Jika jumlah kedua pancake sudah benar, segera ketuk tombol <strong>BALIK SEKARANG!</strong> sebelum waktu habis.</li>
-                  <li>Pancake akan terbalik di udara menjadi matang keemasan dengan lelehan mentega dan sirup maple!</li>
+                  <li>Perhatikan target hasil penjumlahan di atas wajan (contoh: <strong>? + ? = 7</strong>).</li>
+                  <li>Di atas wajan sudah terdapat <strong>4 pancake bernomor</strong> yang sedang dimasak.</li>
+                  <li>Ketuk <strong>2 pancake</strong> yang jika dijumlahkan menghasilkan angka target, lalu segera ketuk tombol <strong>BALIK SEKARANG!</strong></li>
                 </ol>
               </div>
 
               <div className="bg-white border-2 border-amber-400 rounded-2xl p-4">
                 <h3 className="font-display font-bold text-base text-amber-900 mb-2">
-                  3. Aturan Skor, Waktu &amp; 10 Level Dapur:
+                  3. Dua Mode Permainan:
                 </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-semibold">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Jawaban Benar: +100 Poin (+50 Bonus Cepat)</span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs font-semibold">
+                  <div className="flex items-start gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <span>
+                      <strong>Petualangan 10 Level:</strong> Selesaikan 10 soal di tiap level dengan
+                      3 nyawa koki.
+                    </span>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Flame className="w-4 h-4 text-rose-600 shrink-0" />
-                    <span>Pancake Hangus: Kehilangan 1 Nyawa (Total 3 Nyawa)</span>
+                  <div className="flex items-start gap-2">
+                    <Flame className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                    <span>
+                      <strong>Maraton Memasak (60 Detik):</strong> Jawab soal sebanyak-banyaknya
+                      dalam waktu tetap 60 detik tanpa batas level (papan skor terpisah)!
+                    </span>
                   </div>
-                  <div>• Level 1–2: Penjumlahan hasil 2–4 (15s &amp; 12s)</div>
-                  <div>• Level 3–4: Penjumlahan hasil 2–6 (10s &amp; 8s)</div>
-                  <div>• Level 5–8: Penjumlahan hasil 2–9 (6 detik)</div>
-                  <div>• Level 9–10: Penjumlahan hasil 2–10 (6 detik)</div>
                 </div>
               </div>
             </div>
@@ -970,7 +1200,7 @@ export default function App() {
       )}
 
       {/* =========================================================
-          MODAL 2: LEADERBOARD (PAPAN SKOR KOKI TERBAIK)
+          MODAL 2: LEADERBOARD TERPISAH (PETUALANGAN 10 LEVEL & MARATON 60 DETIK)
          ========================================================= */}
       {showLeaderboardModal && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
@@ -983,7 +1213,7 @@ export default function App() {
                     Leaderboard Master Pancake
                   </h2>
                   <p className="text-xs text-stone-600 font-semibold">
-                    Daftar Koki Cilik Terbaik · SDN 66 Banda Aceh
+                    Papan Skor Koki Cilik Terbaik · SDN 66 Banda Aceh
                   </p>
                 </div>
               </div>
@@ -997,6 +1227,35 @@ export default function App() {
               </button>
             </div>
 
+            {/* Interactive Mode Tabs for Separate Leaderboards */}
+            <div className="grid grid-cols-2 gap-2 p-1.5 bg-amber-200/80 rounded-2xl border border-amber-400 mb-4">
+              <button
+                type="button"
+                onClick={() => setLeaderboardTab('adventure')}
+                className={`py-2.5 px-3 rounded-xl font-display font-bold text-xs sm:text-sm transition-all cursor-pointer flex items-center justify-center gap-1.5 whitespace-nowrap ${
+                  leaderboardTab === 'adventure'
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : 'text-stone-800 hover:bg-amber-100'
+                }`}
+              >
+                <Trophy className="w-4 h-4 shrink-0" />
+                <span>Petualangan 10 Level</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setLeaderboardTab('marathon')}
+                className={`py-2.5 px-3 rounded-xl font-display font-bold text-xs sm:text-sm transition-all cursor-pointer flex items-center justify-center gap-1.5 whitespace-nowrap ${
+                  leaderboardTab === 'marathon'
+                    ? 'bg-rose-600 text-white shadow-sm'
+                    : 'text-stone-800 hover:bg-amber-100'
+                }`}
+              >
+                <Timer className="w-4 h-4 shrink-0" />
+                <span>Maraton Memasak (60s)</span>
+              </button>
+            </div>
+
             <div className="overflow-x-auto bg-white border-2 border-amber-400 rounded-2xl">
               <table className="w-full text-left border-collapse text-xs sm:text-sm tabular-nums">
                 <thead>
@@ -1004,13 +1263,15 @@ export default function App() {
                     <th className="py-3 px-3">#</th>
                     <th className="py-3 px-3">Nama Koki</th>
                     <th className="py-3 px-3">Kelas</th>
-                    <th className="py-3 px-3">Level</th>
+                    <th className="py-3 px-3">
+                      {leaderboardTab === 'marathon' ? 'Soal Benar' : 'Level'}
+                    </th>
                     <th className="py-3 px-3">Akurasi</th>
                     <th className="py-3 px-3 text-right">Skor</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-amber-200">
-                  {leaderboard.map((entry, idx) => (
+                  {activeLeaderboardList.map((entry, idx) => (
                     <tr key={entry.id} className="hover:bg-amber-50/80 font-medium">
                       <td className="py-2.5 px-3 font-display font-bold text-amber-900">
                         {idx + 1}
@@ -1021,7 +1282,9 @@ export default function App() {
                       </td>
                       <td className="py-2.5 px-3 font-semibold text-stone-700">{entry.gradeClass}</td>
                       <td className="py-2.5 px-3 font-semibold text-emerald-800">
-                        Lv.{entry.highestLevel}
+                        {leaderboardTab === 'marathon'
+                          ? `${entry.correctCount} Soal`
+                          : `Lv.${entry.highestLevel}`}
                       </td>
                       <td className="py-2.5 px-3 font-semibold text-sky-800">{entry.accuracy}%</td>
                       <td className="py-2.5 px-3 text-right font-display font-bold text-base text-amber-800">

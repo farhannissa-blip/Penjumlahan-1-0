@@ -3,23 +3,33 @@ import {
   Flame,
   Heart,
   Home,
+  Lightbulb,
   RotateCcw,
   Sparkles,
   Timer,
   Utensils,
   Volume2,
   VolumeX,
+  X,
 } from 'lucide-react';
-import { MathQuestion, PancakeChoice, getLevelConfig } from '../utils/mathGasing';
+import {
+  ContextualGasingTip,
+  GameMode,
+  MathQuestion,
+  PancakeChoice,
+  getLevelConfig,
+} from '../utils/mathGasing';
 import { Pancake25D, PancakeCookState } from './Pancake25D';
 import { ChefCharacter, ChefMood } from './ChefCharacter';
+import { FastBonusCelebration } from './FastBonusCelebration';
 
 interface KitchenStageProps {
+  gameMode: GameMode;
   playerName: string;
   schoolName: string;
   gradeClass: string;
   level: number;
-  questionIndex: number; // 1..10
+  questionIndex: number; // 1..10 in adventure, 1..infinity in marathon
   score: number;
   lives: number;
   correctCount: number;
@@ -30,16 +40,20 @@ interface KitchenStageProps {
   timeLeft: number;
   chefMood: ChefMood;
   chefSpeech: string;
+  activeGasingTip: ContextualGasingTip | null;
+  fastBonusTrigger: number;
   isMuted: boolean;
   onToggleMute: () => void;
   onTogglePancakeOnSkillet: (choice: PancakeChoice) => void;
   onClearSkillet: () => void;
   onFlipPancakes: () => void;
+  onDismissGasingTip: () => void;
   onNextAfterBurn: () => void;
   onReturnHome: () => void;
 }
 
 export const KitchenStage: React.FC<KitchenStageProps> = ({
+  gameMode,
   playerName,
   schoolName,
   gradeClass,
@@ -55,18 +69,58 @@ export const KitchenStage: React.FC<KitchenStageProps> = ({
   timeLeft,
   chefMood,
   chefSpeech,
+  activeGasingTip,
+  fastBonusTrigger,
   isMuted,
   onToggleMute,
   onTogglePancakeOnSkillet,
   onClearSkillet,
   onFlipPancakes,
+  onDismissGasingTip,
   onNextAfterBurn,
   onReturnHome,
 }) => {
+  const isMarathon = gameMode === 'marathon';
   const levelConfig = getLevelConfig(level);
-  const timeRatio = Math.max(0, Math.min(1, timeLeft / question.timeLimitSeconds));
+  const totalDuration = isMarathon ? 60 : question.timeLimitSeconds;
+  const timeRatio = Math.max(0, Math.min(1, timeLeft / totalDuration));
   const heatRatio = 1 - timeRatio;
-  const isLowTime = timeRatio <= 0.35 && skilletState !== 'golden' && skilletState !== 'flipping';
+  const isCookingActive = skilletState !== 'golden' && skilletState !== 'flipping';
+  const isLowTime = (timeRatio <= 0.3 && isCookingActive) || skilletState === 'burnt';
+  const isMediumHeat = heatRatio >= 0.35 && isCookingActive;
+
+  // Delay the explanation modal slightly when burnt so the player sees the red-blinking burnt pancakes on the wajan
+  const [showBurnModal, setShowBurnModal] = React.useState(false);
+  React.useEffect(() => {
+    if (skilletState === 'burnt') {
+      const timer = window.setTimeout(() => setShowBurnModal(true), 1150);
+      return () => window.clearTimeout(timer);
+    }
+    setShowBurnModal(false);
+  }, [skilletState]);
+
+  // Dynamic CSS Variables for Skillet Smoke Plumes based on remaining time
+  const effectiveSkilletHeat = skilletState === 'burnt' ? 1 : heatRatio;
+  const skilletSmokeDuration = Math.max(0.42, 2.1 - effectiveSkilletHeat * 1.65).toFixed(2);
+  const skilletSmokeOpacity = Math.min(0.92, 0.18 + effectiveSkilletHeat * 0.74).toFixed(2);
+  const skilletSmokeScale = (1.15 + effectiveSkilletHeat * 1.45).toFixed(2);
+  const skilletSmokeRiseY = `-${Math.round(48 + effectiveSkilletHeat * 56)}px`;
+  const skilletPuffCount =
+    skilletState === 'burnt' || effectiveSkilletHeat >= 0.75
+      ? 7
+      : effectiveSkilletHeat >= 0.5
+      ? 5
+      : 3;
+
+  const getSkilletSmokeColor = () => {
+    if (skilletState === 'burnt' || effectiveSkilletHeat >= 0.8) {
+      return 'bg-stone-800/90 blur-md';
+    }
+    if (effectiveSkilletHeat >= 0.6) {
+      return 'bg-stone-500/75 blur-md';
+    }
+    return 'bg-stone-300/55 blur-sm';
+  };
 
   const currentSelectedSum =
     selectedPancakes.length === 2
@@ -87,6 +141,9 @@ export const KitchenStage: React.FC<KitchenStageProps> = ({
 
   return (
     <div className="h-[100dvh] max-h-[100dvh] w-full flex flex-col justify-between relative overflow-hidden bg-stone-950 select-none">
+      {/* Fast Bonus Fireworks & Confetti Celebration Overlay */}
+      <FastBonusCelebration triggerKey={fastBonusTrigger} />
+
       {/* 2.5D Kitchen Backdrop Image with Warm Scrim */}
       <div className="pointer-events-none absolute inset-0 z-0">
         <img
@@ -119,19 +176,23 @@ export const KitchenStage: React.FC<KitchenStageProps> = ({
                 <span className="text-amber-300 shrink-0">{gradeClass}</span>
               </div>
               <div className="hidden sm:block text-[11px] text-amber-200/75 truncate">
-                {schoolName} · {levelConfig.kitchenBadge}
+                {schoolName} · {isMarathon ? 'Mode Maraton Memasak 60 Detik' : levelConfig.kitchenBadge}
               </div>
             </div>
           </div>
 
-          {/* Center HUD Metrics: Level, Soal, Skor, Benar, Hangus */}
+          {/* Center HUD Metrics: Mode/Level, Soal, Skor, Benar, Hangus */}
           <div className="flex items-center gap-1.5 sm:gap-3 text-xs sm:text-sm font-bold tabular-nums shrink-0">
-            <span className="text-amber-200">
-              Lv.<strong className="text-amber-400">{level}</strong>
-            </span>
+            {isMarathon ? (
+              <span className="text-rose-300 font-extrabold">MARATON 60s</span>
+            ) : (
+              <span className="text-amber-200">
+                Lv.<strong className="text-amber-400">{level}</strong>
+              </span>
+            )}
             <span aria-hidden="true" className="text-stone-500">·</span>
             <span className="text-amber-200">
-              Soal <strong className="text-white">{questionIndex}/10</strong>
+              Soal <strong className="text-white">{isMarathon ? `#${questionIndex}` : `${questionIndex}/10`}</strong>
             </span>
             <span aria-hidden="true" className="text-stone-500">·</span>
             <span className="text-amber-200">
@@ -139,30 +200,40 @@ export const KitchenStage: React.FC<KitchenStageProps> = ({
             </span>
             <span aria-hidden="true" className="hidden md:inline text-stone-500">·</span>
             <span className="hidden md:inline text-emerald-400">Benar: {correctCount}</span>
-            <span aria-hidden="true" className="hidden md:inline text-stone-500">·</span>
-            <span className="hidden md:inline text-rose-400">Hangus: {burntCount}</span>
+            {!isMarathon && (
+              <>
+                <span aria-hidden="true" className="hidden md:inline text-stone-500">·</span>
+                <span className="hidden md:inline text-rose-400">Hangus: {burntCount}</span>
+              </>
+            )}
           </div>
 
-          {/* Right HUD: Lives (Nyawa) & Audio Toggle */}
+          {/* Right HUD: Lives (Nyawa) or Marathon Badge & Audio Toggle */}
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            <div
-              className="flex items-center gap-1 bg-stone-900/90 border border-rose-500/50 rounded-xl px-2 py-1"
-              aria-label={`Sisa nyawa ${lives} dari 3`}
-            >
-              {[1, 2, 3].map((heartIdx) => (
-                <Heart
-                  key={heartIdx}
-                  className={`w-3.5 h-3.5 sm:w-4 sm:h-4 transition-transform duration-300 ${
-                    heartIdx <= lives
-                      ? 'text-rose-500 fill-rose-500 scale-100'
-                      : 'text-stone-600 fill-stone-800 scale-75'
-                  }`}
-                />
-              ))}
-              <span className="ml-0.5 text-[11px] sm:text-xs font-bold text-rose-200 tabular-nums">
-                {lives}/3
-              </span>
-            </div>
+            {!isMarathon ? (
+              <div
+                className="flex items-center gap-1 bg-stone-900/90 border border-rose-500/50 rounded-xl px-2 py-1"
+                aria-label={`Sisa nyawa ${lives} dari 3`}
+              >
+                {[1, 2, 3].map((heartIdx) => (
+                  <Heart
+                    key={heartIdx}
+                    className={`w-3.5 h-3.5 sm:w-4 sm:h-4 transition-transform duration-300 ${
+                      heartIdx <= lives
+                        ? 'text-rose-500 fill-rose-500 scale-100'
+                        : 'text-stone-600 fill-stone-800 scale-75'
+                    }`}
+                  />
+                ))}
+                <span className="ml-0.5 text-[11px] sm:text-xs font-bold text-rose-200 tabular-nums">
+                  {lives}/3
+                </span>
+              </div>
+            ) : (
+              <div className="bg-stone-900/90 border border-amber-500/60 rounded-xl px-2.5 py-1 text-xs font-bold text-emerald-300 tabular-nums">
+                ✓ {correctCount} Terjawab
+              </div>
+            )}
 
             <button
               type="button"
@@ -299,12 +370,44 @@ export const KitchenStage: React.FC<KitchenStageProps> = ({
               skilletState === 'wrong_pair' || skilletState === 'burnt' ? 'animate-shake' : ''
             }`}
           >
-            {/* Light Smoke Rising from Skillet when Time is Low */}
-            {isLowTime && (
-              <div className="pointer-events-none absolute -top-5 inset-x-0 flex justify-center gap-8 z-30">
-                <span className="w-7 h-7 rounded-full bg-stone-400/45 blur-md animate-smoke-1" />
-                <span className="w-9 h-9 rounded-full bg-stone-300/50 blur-md animate-smoke-2" />
-                <span className="w-7 h-7 rounded-full bg-stone-400/45 blur-md animate-smoke-3" />
+            {/* Dynamic Progressive Smoke Plumes Rising from Skillet based on Remaining Time */}
+            {(isMediumHeat || skilletState === 'burnt') && (
+              <div
+                className="pointer-events-none absolute -top-6 inset-x-0 flex justify-center items-center gap-3 sm:gap-5 z-30"
+                style={
+                  {
+                    '--smoke-duration': `${skilletSmokeDuration}s`,
+                    '--smoke-opacity': skilletSmokeOpacity,
+                    '--smoke-scale': skilletSmokeScale,
+                    '--smoke-rise-y': skilletSmokeRiseY,
+                  } as React.CSSProperties
+                }
+              >
+                {Array.from({ length: skilletPuffCount }).map((_, idx) => {
+                  const delaySec = (
+                    (Number(skilletSmokeDuration) / skilletPuffCount) *
+                    idx
+                  ).toFixed(2);
+                  const driftX = idx % 2 === 0 ? '12px' : '-12px';
+                  const puffSize =
+                    effectiveSkilletHeat >= 0.75
+                      ? 'w-9 h-9 sm:w-12 sm:h-12'
+                      : effectiveSkilletHeat >= 0.55
+                      ? 'w-7 h-7 sm:w-9 sm:h-9'
+                      : 'w-5 h-5 sm:w-7 sm:h-7';
+                  return (
+                    <span
+                      key={idx}
+                      className={`rounded-full animate-dynamic-smoke ${puffSize} ${getSkilletSmokeColor()}`}
+                      style={
+                        {
+                          animationDelay: `${delaySec}s`,
+                          '--smoke-drift-x': driftX,
+                        } as React.CSSProperties
+                      }
+                    />
+                  );
+                })}
               </div>
             )}
 
@@ -434,19 +537,78 @@ export const KitchenStage: React.FC<KitchenStageProps> = ({
         </section>
       </main>
 
-      {/* Explanation Overlay when Pancake Burns (Time Out or Burn) */}
-      {skilletState === 'burnt' && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
+      {/* Contextual 'Tips Gasing' Corner Widget (Appears in corner when player selects a wrong pair) */}
+      {activeGasingTip && skilletState !== 'burnt' && (
+        <aside
+          key={activeGasingTip.id}
+          aria-live="polite"
+          className="fixed bottom-16 right-2.5 left-2.5 sm:left-auto sm:bottom-4 sm:right-4 sm:w-[350px] lg:w-[375px] z-40 card-25d-wood rounded-2xl p-3 sm:p-4 text-stone-900 animate-gasing-tip"
+        >
+          {/* Header Row */}
+          <div className="flex items-start justify-between gap-2 mb-1.5">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-amber-500 border-2 border-amber-700 text-stone-950 flex items-center justify-center shrink-0 shadow-xs">
+                <Lightbulb className="w-4 h-4 sm:w-4.5 sm:h-4.5 fill-amber-200" />
+              </div>
+              <div>
+                <div className="text-[10px] sm:text-[11px] font-extrabold tracking-wider text-amber-800 uppercase leading-none">
+                  TIPS GASING · STRATEGI HITUNG CEPAT
+                </div>
+                <div className="text-xs sm:text-sm font-display font-bold text-rose-700 leading-tight mt-0.5">
+                  {activeGasingTip.headline}
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={onDismissGasingTip}
+              className="p-1 rounded-lg bg-amber-200/80 hover:bg-amber-300 text-stone-700 transition-colors cursor-pointer shrink-0"
+              aria-label="Tutup Tips Gasing"
+              title="Tutup Tips"
+            >
+              <X className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+            </button>
+          </div>
+
+          {/* Step 1: Mental Math Breakdown ("Simpan Angka Besar di Kepala") */}
+          <div className="bg-amber-100/95 border border-amber-400 rounded-xl px-2.5 py-1.5 mb-1.5 text-[11px] sm:text-xs font-semibold text-stone-800">
+            <div className="flex items-center justify-between gap-2 mb-0.5 font-mono font-bold tabular-nums">
+              <span className="text-rose-700">
+                Pilihanmu: {activeGasingTip.selectedA} + {activeGasingTip.selectedB} ={' '}
+                {activeGasingTip.selectedSum}
+              </span>
+              <span className="text-emerald-800">Target: {activeGasingTip.targetSum}</span>
+            </div>
+            <div className="text-stone-700 leading-snug">
+              {activeGasingTip.mentalMathStep}
+            </div>
+          </div>
+
+          {/* Step 2: Actionable Strategy Advice without giving away the answer */}
+          <p className="text-[11px] sm:text-xs font-bold text-amber-950 leading-snug">
+            {activeGasingTip.strategyAdvice}
+          </p>
+        </aside>
+      )}
+
+      {/* Explanation Overlay when Pancake Burns (Shown after burnt red-blink animation plays) */}
+      {showBurnModal && skilletState === 'burnt' && (
+        <div className="fixed inset-0 z-50 bg-black/65 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="card-25d-wood max-w-md w-full rounded-3xl p-5 sm:p-6 text-stone-900">
             <div className="text-xs font-extrabold text-rose-700 mb-1">
-              WAKTU HABIS · PANCAKE HANGUS (-1 NYAWA)
+              {isMarathon
+                ? 'WAKTU MARATON 60 DETIK HABIS!'
+                : 'WAKTU HABIS · PANCAKE HANGUS (-1 NYAWA)'}
             </div>
             <h3 className="text-xl sm:text-2xl font-display font-bold text-stone-900 mb-2">
-              Jangan Menyerah, Koki {playerName}!
+              {isMarathon
+                ? `Hebat, Koki ${playerName}!`
+                : `Jangan Menyerah, Koki ${playerName}!`}
             </h3>
             <div className="bg-amber-100 border-2 border-amber-500 rounded-2xl p-3.5 sm:p-4 mb-4">
               <div className="text-xs font-bold text-amber-900 mb-1">
-                PENJELASAN JAWABAN YANG BENAR:
+                PENJELASAN JAWABAN SOAL TERAKHIR:
               </div>
               <div className="text-xl font-display font-bold text-emerald-800 mb-1 tabular-nums">
                 {question.numA} + {question.numB} = {question.targetSum}
@@ -460,7 +622,7 @@ export const KitchenStage: React.FC<KitchenStageProps> = ({
               onClick={onNextAfterBurn}
               className="w-full py-3.5 px-6 rounded-2xl btn-25d-emerald text-stone-950 font-display font-bold text-base sm:text-lg cursor-pointer"
             >
-              LANJUT MASAK SOAL BERIKUTNYA
+              {isMarathon ? 'LIHAT HASIL MARATON 60 DETIK' : 'LANJUT MASAK SOAL BERIKUTNYA'}
             </button>
           </div>
         </div>
