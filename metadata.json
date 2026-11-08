@@ -1,0 +1,6 @@
+{
+  "name": "Pancake Master – Petualangan Penjumlahan Metode Gasing",
+  "description": "Game edukasi matematika interaktif 2.5D untuk siswa SD mempelajari penjumlahan Metode GASING (Gampang, Asyik, dan Menyenangkan) bersama Koki Cilik SDN 66 Banda Aceh.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
